@@ -10,13 +10,9 @@
  *******************************************************************************/
 package org.eclipse.debug.internal.ui.viewers.provisional;
 
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.ISafeRunnable;
-import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.ListenerList;
 import org.eclipse.core.runtime.SafeRunner;
-import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.internal.ui.DebugUIPlugin;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.IModelChangedListener;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.IModelDelta;
@@ -38,7 +34,7 @@ public abstract class AbstractModelProxy implements IModelProxy2 {
 	private boolean fInstalled = false;
 	private ITreeModelViewer fViewer;
 	private boolean fDisposed = false;
-	private Job fInstallJob;
+	// private Job fInstallJob;
 
 
 	private ListenerList<IModelChangedListener> fListeners = new ListenerList<>();
@@ -76,7 +72,9 @@ public abstract class AbstractModelProxy implements IModelProxy2 {
 	 */
 	public void fireModelChanged(IModelDelta delta) {
 	    synchronized(this) {
-	        if (!fInstalled || fDisposed) return;
+	        if (!fInstalled || fDisposed) {
+				return;
+			}
 	    }
 
 		final IModelDelta root = getRootDelta(delta);
@@ -118,10 +116,10 @@ public abstract class AbstractModelProxy implements IModelProxy2 {
 	 */
 	@Override
 	public synchronized void dispose() {
-	    if (fInstallJob != null) {
-	        fInstallJob.cancel();
-	        fInstallJob = null;
-	    }
+		// if (fInstallJob != null) {
+		// fInstallJob.cancel();
+		// fInstallJob = null;
+		// }
 		fDisposed = true;
 		fContext = null;
 		fViewer = null;
@@ -144,35 +142,49 @@ public abstract class AbstractModelProxy implements IModelProxy2 {
         setDisposed(false);
 
         synchronized(this) {
+			System.out.println(getClass().getSimpleName());
     	    fViewer = viewer;
     	    fContext = viewer.getPresentationContext();
-            fInstallJob = new Job("Model Proxy installed notification job") {//$NON-NLS-1$
-                @Override
-				protected IStatus run(IProgressMonitor monitor) {
-                    synchronized(this) {
-                        fInstallJob = null;
-                    }
-                    if (!monitor.isCanceled()) {
-                        init(getTreeModelViewer().getPresentationContext());
-                        setInstalled(true);
-                        installed(getViewer());
-                    }
-                    return Status.OK_STATUS;
-                }
-
-                @Override
-				public boolean belongsTo(Object family) {
-					return AbstractModelProxy.this == family;
-				}
-
-				@Override
-				public boolean shouldRun() {
-                    return !isDisposed();
-                }
-            };
-            fInstallJob.setSystem(true);
+			// fInstallJob = new Job("Model Proxy installed notification job")
+			// {//$NON-NLS-1$
+			// @Override
+			// protected IStatus run(IProgressMonitor monitor) {
+			// synchronized(this) {
+			// fInstallJob = null;
+			// }
+			// // try {
+			//// Thread.sleep(100L);
+			// // } catch (InterruptedException e) {
+			// // // TODO Auto-generated catch block
+			// // e.printStackTrace();
+			// // }
+			// if (!monitor.isCanceled()) {
+			// init(getTreeModelViewer().getPresentationContext());
+			// setInstalled(true);
+			// installed(getViewer());
+			// }
+			// return Status.OK_STATUS;
+			// }
+			//
+			// @Override
+			// public boolean belongsTo(Object family) {
+			// return AbstractModelProxy.this == family;
+			// }
+			//
+			// @Override
+			// public boolean shouldRun() {
+			// return !isDisposed();
+			// }
+			// };
+			// fInstallJob.setSystem(true);
         }
-        fInstallJob.schedule();
+		// fInstallJob.schedule();
+	}
+
+	public void postInstalled() {
+		init(getTreeModelViewer().getPresentationContext());
+		setInstalled(true);
+		installed(getViewer());
 	}
 
 	/**

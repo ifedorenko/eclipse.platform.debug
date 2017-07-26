@@ -15,6 +15,7 @@
 package org.eclipse.debug.internal.ui.viewers.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -46,6 +47,7 @@ import org.eclipse.debug.internal.ui.viewers.model.provisional.ITreeModelViewer;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.IViewerUpdate;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.IViewerUpdateListener;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.TreeModelViewerFilter;
+import org.eclipse.debug.internal.ui.viewers.provisional.AbstractModelProxy;
 import org.eclipse.jface.viewers.IContentProvider;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.TreePath;
@@ -212,7 +214,9 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
         cancelSubtreeUpdates(TreePath.EMPTY);
         fTransform.clear();
         if (newInput != null) {
-            installModelProxy(newInput, TreePath.EMPTY);
+			List<AbstractModelProxy> installed = new ArrayList<>();
+			installModelProxy(newInput, TreePath.EMPTY, installed);
+			installed.forEach(child -> child.postInstalled());
             fStateTracker.restoreViewerState(newInput);
         }
     }
@@ -272,11 +276,10 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
      * @param input the input to install the model proxy on
      * @param path the {@link TreePath} to install the proxy for
      */
-    private void installModelProxy(Object input, TreePath path) {
-
+	private void installModelProxy(Object input, TreePath path, List<AbstractModelProxy> installed) {
         if (!fTreeModelProxies.containsKey(path) && !fModelProxies.containsKey(path.getLastSegment())) {
             Object element = path.getSegmentCount() != 0 ? path.getLastSegment() : input;
-            IModelProxy proxy = null;
+			IModelProxy proxy = null;
             IModelProxyFactory2 modelProxyFactory2 = ViewerAdapterService.getModelProxyFactory2(element);
             if (modelProxyFactory2 != null) {
                 proxy = modelProxyFactory2.createTreeModelProxy(input, path, getPresentationContext());
@@ -297,6 +300,9 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
             if (proxy instanceof IModelProxy2) {
                 proxy.addModelChangedListener(this);
                 ((IModelProxy2)proxy).initialize(getViewer());
+				if (proxy instanceof AbstractModelProxy) {
+					installed.add((AbstractModelProxy) proxy);
+				}
             } else if (proxy != null) {
                 final IModelProxy finalProxy = proxy;
                 Job job = new Job("Model Proxy installed notification job") {//$NON-NLS-1$
@@ -485,26 +491,48 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
             // If we're in display thread, process the delta immediately to
             // avoid "skid" in processing events.
             if (Thread.currentThread().equals(display.getThread())) {
-                doModelChanged(delta, proxy);
+				doModelChanged(delta, proxy);
             }
+			else if (isInstall(delta)) {
+				List<AbstractModelProxy> installed = Collections.synchronizedList(new ArrayList<>());
+				display.syncExec(() -> doModelChanged(delta, proxy, installed));
+				installed.forEach(child -> child.postInstalled());
+			}
             else {
 				fDelayedDoModelChangeJob.runDelayed(delta, proxy);
             }
         }
     }
 
+	private boolean isInstall(IModelDelta delta) {
+		boolean[] result = new boolean[1];
+		delta.accept((child, depth) -> {
+			if ((child.getFlags() & IModelDelta.INSTALL) != 0) {
+				result[0] = true;
+				return false;
+			}
+			return true;
+		});
+		return result[0];
+	}
+
     /**
      * Executes the model proxy in UI thread.
      * @param delta Delta to process
      * @param proxy Proxy that fired the delta.
      */
-    private void doModelChanged(IModelDelta delta, IModelProxy proxy) {
+	private void doModelChanged(IModelDelta delta, IModelProxy proxy) {
+		List<AbstractModelProxy> installed = new ArrayList<>();
+		doModelChanged(delta, proxy, installed);
+		installed.forEach(child -> child.postInstalled());
+	}
+	private void doModelChanged(IModelDelta delta, IModelProxy proxy, List<AbstractModelProxy> installed) {
         if (!proxy.isDisposed()) {
             if (DebugUIPlugin.DEBUG_DELTAS && DebugUIPlugin.DEBUG_TEST_PRESENTATION_ID(getPresentationContext())) {
                 DebugUIPlugin.trace("RECEIVED DELTA: " + delta.toString()); //$NON-NLS-1$
             }
 
-            updateModel(delta, getModelDeltaMask());
+			doUpdateModel(delta, getModelDeltaMask(), installed);
 
             // Initiate model update sequence before notifying of the model changed.
             trigger(null);
@@ -528,6 +556,12 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
 
     @Override
 	public void updateModel(IModelDelta delta, int mask) {
+		List<AbstractModelProxy> installed = new ArrayList<>();
+		doUpdateModel(delta, mask, installed);
+		installed.forEach(child -> child.postInstalled());
+	}
+
+	private void doUpdateModel(IModelDelta delta, int mask, List<AbstractModelProxy> installed) {
     	// Processing deltas with null input leads to NPEs
     	// (Bug 380288 - NPE switching to the Breakpoints View)
     	if (getViewer() == null || getViewer().getInput() == null) {
@@ -536,10 +570,9 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
 
 		fRevealPath = null;
         IModelDelta[] deltaArray = new IModelDelta[] { delta };
-        updateNodes(deltaArray, mask & (IModelDelta.REMOVED | IModelDelta.UNINSTALL));
-        updateNodes(deltaArray, mask & ITreeModelContentProvider.UPDATE_MODEL_DELTA_FLAGS
-            & ~(IModelDelta.REMOVED | IModelDelta.UNINSTALL));
-        updateNodes(deltaArray, mask & ITreeModelContentProvider.CONTROL_MODEL_DELTA_FLAGS);
+		updateNodes(deltaArray, mask & (IModelDelta.REMOVED | IModelDelta.UNINSTALL), installed);
+		updateNodes(deltaArray, mask & ITreeModelContentProvider.UPDATE_MODEL_DELTA_FLAGS & ~(IModelDelta.REMOVED | IModelDelta.UNINSTALL), installed);
+		updateNodes(deltaArray, mask & ITreeModelContentProvider.CONTROL_MODEL_DELTA_FLAGS, installed);
 
         fStateTracker.checkIfRestoreComplete();
     }
@@ -1242,7 +1275,7 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
      * @param mask the model delta mask
      * @see IModelDelta for a list of masks
      */
-    protected void updateNodes(IModelDelta[] nodes, int mask) {
+	protected void updateNodes(IModelDelta[] nodes, int mask, List<AbstractModelProxy> installed) {
         for (int i = 0; i < nodes.length; i++) {
             IModelDelta node = nodes[i];
             int flags = node.getFlags() & mask;
@@ -1266,7 +1299,7 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
                 handleReplace(node);
             }
             if ((flags & IModelDelta.INSTALL) != 0) {
-                handleInstall(node);
+				handleInstall(node, installed);
             }
             if ((flags & IModelDelta.UNINSTALL) != 0) {
                 handleUninstall(node);
@@ -1283,12 +1316,12 @@ public class TreeModelContentProvider implements ITreeModelContentProvider, ICon
             if ((flags & IModelDelta.REVEAL) != 0) {
                 handleReveal(node);
             }
-            updateNodes(node.getChildDeltas(), mask);
+			updateNodes(node.getChildDeltas(), mask, installed);
         }
     }
 
-    protected void handleInstall(IModelDelta delta) {
-        installModelProxy(getViewer().getInput(), getFullTreePath(delta));
+	protected void handleInstall(IModelDelta delta, List<AbstractModelProxy> installed) {
+		installModelProxy(getViewer().getInput(), getFullTreePath(delta), installed);
     }
 
     protected void handleUninstall(IModelDelta delta) {

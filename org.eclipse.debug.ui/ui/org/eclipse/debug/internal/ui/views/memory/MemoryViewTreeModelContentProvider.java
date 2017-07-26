@@ -11,6 +11,8 @@
 
 package org.eclipse.debug.internal.ui.views.memory;
 
+import java.util.List;
+
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.model.IMemoryBlock;
 import org.eclipse.debug.core.model.IMemoryBlockRetrieval;
@@ -18,11 +20,12 @@ import org.eclipse.debug.internal.ui.viewers.model.ITreeModelContentProvider;
 import org.eclipse.debug.internal.ui.viewers.model.TreeModelContentProvider;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.IModelDelta;
 import org.eclipse.debug.internal.ui.viewers.model.provisional.TreeModelViewer;
+import org.eclipse.debug.internal.ui.viewers.provisional.AbstractModelProxy;
 
 public class MemoryViewTreeModelContentProvider extends TreeModelContentProvider {
 
 	@Override
-	protected void updateNodes(IModelDelta[] nodes, int mask) {
+	protected void updateNodes(IModelDelta[] nodes, int mask, List<AbstractModelProxy> installed) {
 
 		if (getViewer() instanceof TreeModelViewer) {
 			for (int i = 0; i < nodes.length; i++) {
@@ -68,7 +71,7 @@ public class MemoryViewTreeModelContentProvider extends TreeModelContentProvider
 					handleReplace(node);
 				}
 				if ((flags & IModelDelta.INSTALL) != 0) {
-					handleInstall(node);
+					handleInstall(node, installed);
 				}
 				if ((flags & IModelDelta.UNINSTALL) != 0) {
 					handleUninstall(node);
@@ -85,7 +88,7 @@ public class MemoryViewTreeModelContentProvider extends TreeModelContentProvider
 				if ((flags & IModelDelta.REVEAL) != 0) {
 					handleReveal(node);
 				}
-				updateNodes(node.getChildDeltas(), mask);
+				updateNodes(node.getChildDeltas(), mask, installed);
 			}
 		}
 	}
@@ -94,8 +97,9 @@ public class MemoryViewTreeModelContentProvider extends TreeModelContentProvider
 		Object input = getViewer().getInput();
 		if (input instanceof IMemoryBlockRetrieval) {
 			IMemoryBlock[] memoryBlocks = DebugPlugin.getDefault().getMemoryBlockManager().getMemoryBlocks((IMemoryBlockRetrieval) input);
-			if (memoryBlocks.length == 1)
+			if (memoryBlocks.length == 1) {
 				return true;
+			}
 		}
 		return false;
 	}
